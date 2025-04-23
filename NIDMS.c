@@ -12,6 +12,8 @@
 #include <net/if.h>
 #include <semaphore.h>
 #include <time.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 #define BUFFER_SIZE 50
 #define MAX_TRACKED_IPS 100
@@ -292,25 +294,44 @@ void end_write() {
 }
 
 void run_logger_process() {
+    // Close the write end of pipe
+    close(pipefd[1]);  
+    
+    // Debug message to confirm logger is running
+    printf("[LOGGER] Logger process started (PID: %d)\n", getpid());
+    
+    // Ensure output directory exists
+    if (mkdir("/home/kali/NIDS", 0755) == -1 && errno != EEXIST) {
+        perror("[LOGGER] mkdir failed");
+    }
+
     char buffer[512];
     while (1) {
         ssize_t len = read(pipefd[0], buffer, sizeof(buffer) - 1);
-        if (len > 0) {
-            buffer[len] = '\0';
-            printf("[LOGGER] Received alert: %s\n", buffer);
-            start_write();
-            FILE *log = fopen("/home/kali/NIDS/alerts.log", "a");
-	if (log) {
-	    fprintf(log, "%s", buffer);
-	    fflush(log);                 // Flush stdio buffer
-    fsync(fileno(log)); 
-	    fclose(log);
-	    printf("[LOGGER] Logged to file successfully.\n");
-	} else {
-	    perror("Failed to open alerts.log");
-	}
-            end_write();
+        if (len <= 0) {
+            if (len == -1) perror("[LOGGER] read error");
+            sleep(1);
+            continue;
         }
+
+        buffer[len] = '\0';
+        
+        // Try preferred location first
+        FILE *log = fopen("/home/kali/NIDS/alerts.log", "a");
+        if (!log) {
+            // Fallback to current directory if preferred fails
+            log = fopen("alerts.log", "a");
+            if (!log) {
+                perror("[LOGGER] fopen failed");
+                continue;
+            }
+        }
+        
+        fprintf(log, "%s", buffer);
+        fflush(log);  // Ensure immediate write
+        fclose(log);
+        
+        printf("[LOGGER] Successfully wrote alert\n");  // Debug confirmation
     }
 }
 
